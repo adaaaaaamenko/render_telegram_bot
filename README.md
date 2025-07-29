@@ -18,6 +18,8 @@ Partially based on the blog post [Getting your python telegram bot working on Re
    - Deploy
 
 Your bot will be live at `https://your-app.onrender.com/healthcheck`
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/adaaaaaamenko/render_telegram_bot/main/)
+
 
 ## Why Webhooks on Render?
 
