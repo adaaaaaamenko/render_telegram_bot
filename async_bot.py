@@ -126,7 +126,7 @@ async def choose_time(update: Update, context: CallbackContext):
 
 async def main():
     bot = Bot(token=BOT_TOKEN)
-    await bot.delete_webhook(drop_pending_updates=True)  # удаляем активный webhook
+    await bot.delete_webhook(drop_pending_updates=True)
 
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -148,3 +148,4 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+
