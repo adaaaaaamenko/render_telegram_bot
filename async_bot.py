@@ -1,117 +1,100 @@
-import asyncio
-import logging
 import os
-
+from dotenv import load_dotenv
+from telegram import Update
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+import asyncio
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
+from datetime import datetime, timedelta
 
-from telegram import Update
-from telegram.ext import (
-    Application,
-    ContextTypes,
-    filters,
-    MessageHandler,
-)
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
+URL = os.getenv("RENDER_EXTERNAL_URL")
+PORT = int(os.getenv("PORT", "8000"))
 
-# Enable logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-# set higher logging level for httpx to avoid all GET and POST requests being logged
-logging.getLogger("httpx").setLevel(logging.WARNING)
+# Загрузка/сохранение записей
+import json
+DATA_FILE = 'appointments.json'
+def load_appointments():
+    try:
+        with open(DATA_FILE) as f: return json.load(f)
+    except: return {}
+def save_appointments(d): json.dump(d, open(DATA_FILE, 'w'), indent=2)
+appointments = load_appointments()
 
-logger = logging.getLogger(__name__)
+languages = {'ru':'Русский','en':'English','ka':'ქართული'}
 
-# Define configuration constants
-URL = os.environ.get("RENDER_EXTERNAL_URL")
-PORT = int(os.environ.get("PORT", 8000))
-TOKEN = os.environ.get("BOT_TOKEN")
+def generate_time_slots():
+    start = datetime.strptime('12:00','%H:%M')
+    end = datetime.strptime('21:00','%H:%M')
+    slots=[]
+    while start<end:
+        slots.append(start.strftime('%H:%M'))
+        start+=timedelta(minutes=30)
+    return slots
 
-# Validate required environment variables
-if not TOKEN:
-    raise ValueError("BOT_TOKEN environment variable is required")
+# Handlers
+async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    keyboard=[[{"text":name,"callback_data":f"lang_{code}"}] for code,name in languages.items()]
+    await update.message.reply_text("Выберите язык:", reply_markup={"inline_keyboard":keyboard})
 
-# Determine mode: webhook if URL is provided, polling otherwise
-USE_WEBHOOK = URL is not None
-logger.info("Running in %s mode", "webhook" if USE_WEBHOOK else "polling")
+async def language_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer()
+    ctx.user_data['lang']=q.data.split('_')[1]
+    kb=[]
+    for t in generate_time_slots():
+        if t in appointments:
+            label=f"{t} ❌ ({languages[appointments[t]]})"; cd="busy"
+        else:
+            label=t; cd=f"time_{t}"
+        kb.append([{"text":label,"callback_data":cd}])
+    await q.edit_message_text("Выберите время:", reply_markup={"inline_keyboard":kb})
 
-
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Echo the user message."""
-    user = update.effective_user
-    message = update.message.text if update.message else None
-
-    if not message:
-        logger.warning("Received update without text message")
-        return
-
-    logger.info("Received message from %s: %s", user.username or user.id, message)
-    await update.message.reply_text(message)
-
-
-async def main() -> None:
-    """Set up PTB application and run in webhook or polling mode."""
-    if USE_WEBHOOK:
-        # Webhook mode for production (Render)
-        logger.info("Starting webhook mode with URL: %s", URL)
-        application = Application.builder().token(TOKEN).updater(None).build()
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
-
-        # Set webhook
-        await application.bot.set_webhook(url=f"{URL}/telegram")
-
-        # Setup web server
-        async def telegram(request: Request) -> Response:
-            data = await request.json()
-            await application.update_queue.put(Update.de_json(data, application.bot))
-            return Response()
-
-        async def health(_: Request) -> PlainTextResponse:
-            return PlainTextResponse("Bot is running!")
-
-        app = Starlette(
-            routes=[
-                Route("/telegram", telegram, methods=["POST"]),
-                Route("/healthcheck", health, methods=["GET"]),
-            ]
-        )
-
-        config = uvicorn.Config(app=app, port=PORT, host="0.0.0.0")
-        server = uvicorn.Server(config)
-
-        async with application:
-            await application.start()
-            await server.serve()
-            await application.stop()
+async def time_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer()
+    t=q.data.split('_')[1]
+    if t in appointments:
+        await q.edit_message_text(f"❗ Уже занято ({languages[appointments[t]]}).")
     else:
-        # Polling mode for local development
-        logger.info("Starting polling mode for local development")
-        application = Application.builder().token(TOKEN).build()
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+        lang=ctx.user_data['lang']; appointments[t]=lang; save_appointments(appointments)
+        await q.edit_message_text(f"✅ Записаны на {t} ({languages[lang]}).")
+        await ctx.bot.send_message(chat_id=ADMIN_CHAT_ID,
+            text=f"Новая запись:\nВремя: {t}\nЯзык: {languages[lang]}\nПользователь: @{q.from_user.username or q.from_user.full_name}")
 
-        async with application:
-            await application.start()
-            await application.updater.start_polling()
-            logger.info("Bot started! Send a message to test it.")
+async def busy_slot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer("Занято", show_alert=True)
 
-            # Keep running until interrupted
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                pass
-            finally:
-                await application.updater.stop()
-                await application.stop()
+# Настрой вебхука и веб‑сервер
+async def main():
+    app = Application.builder().token(BOT_TOKEN).updater(None).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(language_selected, pattern="^lang_"))
+    app.add_handler(CallbackQueryHandler(time_selected, pattern="^time_"))
+    app.add_handler(CallbackQueryHandler(busy_slot, pattern="^busy$"))
+    await app.bot.set_webhook(f"{URL}/telegram")
 
+    async def telegram(request: Request) -> Response:
+        data = await request.json()
+        await app.update_queue.put(Update.de_json(data, app.bot))
+        return Response()
+
+    async def health(_: Request):
+        return PlainTextResponse("OK")
+
+    starlette_app = Starlette(routes=[
+        Route("/telegram", telegram, methods=["POST"]),
+        Route("/healthcheck", health, methods=["GET"]),
+    ])
+    webserver = uvicorn.Server(uvicorn.Config(starlette_app, port=PORT, host="0.0.0.0"))
+    async with app:
+        await app.start()
+        await webserver.serve()
+        await app.stop()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
-    except Exception as e:
-        logger.error("Bot failed to start: %s", e)
-        raise
+    asyncio.run(main())
+
