@@ -1,12 +1,13 @@
 import json
 import os
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import (
     ApplicationBuilder, CallbackContext, CallbackQueryHandler,
     CommandHandler, ConversationHandler
 )
 from dotenv import load_dotenv
+import asyncio
 
 load_dotenv()
 
@@ -44,13 +45,11 @@ translations = {
     }
 }
 
-
 def load_appointments():
     if os.path.exists("appointments.json"):
         with open("appointments.json", "r") as f:
             return json.load(f)
     return {}
-
 
 def save_appointment(date, time, lang):
     appointments = load_appointments()
@@ -60,15 +59,12 @@ def save_appointment(date, time, lang):
     with open("appointments.json", "w") as f:
         json.dump(appointments, f)
 
-
 def is_booked(date, time):
     appointments = load_appointments()
     return date in appointments and time in appointments[date]
 
-
 def get_language_text(lang, key):
     return translations.get(lang, translations["en"]).get(key)
-
 
 async def start(update: Update, context: CallbackContext):
     keyboard = [
@@ -80,7 +76,6 @@ async def start(update: Update, context: CallbackContext):
         "Пожалуйста, выберите язык обслуживания:\nPlease choose a service language:\nგთხოვთ, აირჩიოთ მომსახურების ენა:",
         reply_markup=InlineKeyboardMarkup(keyboard))
     return LANGUAGE
-
 
 async def choose_language(update: Update, context: CallbackContext):
     lang = update.callback_query.data
@@ -94,7 +89,6 @@ async def choose_language(update: Update, context: CallbackContext):
         get_language_text(lang, "choose_date"),
         reply_markup=InlineKeyboardMarkup(keyboard))
     return DATE
-
 
 async def choose_date(update: Update, context: CallbackContext):
     lang = context.user_data["lang"]
@@ -111,7 +105,6 @@ async def choose_date(update: Update, context: CallbackContext):
         get_language_text(lang, "choose_time"),
         reply_markup=InlineKeyboardMarkup(keyboard))
     return TIME
-
 
 async def choose_time(update: Update, context: CallbackContext):
     lang = context.user_data["lang"]
@@ -131,8 +124,10 @@ async def choose_time(update: Update, context: CallbackContext):
     await update.callback_query.edit_message_text(get_language_text(lang, "confirm").format(date, time, lang))
     return ConversationHandler.END
 
+async def main():
+    bot = Bot(token=BOT_TOKEN)
+    await bot.delete_webhook(drop_pending_updates=True)  # удаляем активный webhook
 
-if __name__ == '__main__':
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
@@ -146,4 +141,10 @@ if __name__ == '__main__':
     )
 
     application.add_handler(conv_handler)
-    application.run_polling()
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+    await application.updater.idle()
+
+if __name__ == '__main__':
+    asyncio.run(main())
