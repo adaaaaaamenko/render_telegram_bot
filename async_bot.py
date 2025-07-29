@@ -1,100 +1,149 @@
+import json
 import os
-from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
-import asyncio
-import uvicorn
-from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import PlainTextResponse, Response
-from starlette.routing import Route
 from datetime import datetime, timedelta
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder, CallbackContext, CallbackQueryHandler,
+    CommandHandler, ConversationHandler
+)
+from dotenv import load_dotenv
 
 load_dotenv()
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
-URL = os.getenv("RENDER_EXTERNAL_URL")
-PORT = int(os.getenv("PORT", "8000"))
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 
-# Загрузка/сохранение записей
-import json
-DATA_FILE = 'appointments.json'
+if not BOT_TOKEN or not ADMIN_CHAT_ID:
+    raise ValueError("BOT_TOKEN or ADMIN_CHAT_ID not set in environment variables")
+
+ADMIN_CHAT_ID = int(ADMIN_CHAT_ID)
+
+LANGUAGE, DATE, TIME = range(3)
+
+translations = {
+    "ru": {
+        "choose_language": "Пожалуйста, выберите язык обслуживания:",
+        "choose_date": "Выберите дату:",
+        "choose_time": "Выберите время:",
+        "already_booked": "Это время уже занято. Язык записи: {}",
+        "confirm": "Вы записаны на {} в {} ({} язык). Спасибо!",
+    },
+    "en": {
+        "choose_language": "Please choose a service language:",
+        "choose_date": "Choose a date:",
+        "choose_time": "Choose a time:",
+        "already_booked": "This slot is already booked. Language: {}",
+        "confirm": "You are booked for {} at {} (language: {}). Thank you!",
+    },
+    "ka": {
+        "choose_language": "გთხოვთ, აირჩიოთ მომსახურების ენა:",
+        "choose_date": "აირჩიეთ თარიღი:",
+        "choose_time": "აირჩიეთ დრო:",
+        "already_booked": "ეს დრო უკვე დაკავებულია. ენა: {}",
+        "confirm": "თქვენ დაჯავშნეთ {} - {} (ენა: {}). მადლობა!",
+    }
+}
+
+
 def load_appointments():
-    try:
-        with open(DATA_FILE) as f: return json.load(f)
-    except: return {}
-def save_appointments(d): json.dump(d, open(DATA_FILE, 'w'), indent=2)
-appointments = load_appointments()
+    if os.path.exists("appointments.json"):
+        with open("appointments.json", "r") as f:
+            return json.load(f)
+    return {}
 
-languages = {'ru':'Русский','en':'English','ka':'ქართული'}
 
-def generate_time_slots():
-    start = datetime.strptime('12:00','%H:%M')
-    end = datetime.strptime('21:00','%H:%M')
-    slots=[]
-    while start<end:
-        slots.append(start.strftime('%H:%M'))
-        start+=timedelta(minutes=30)
-    return slots
+def save_appointment(date, time, lang):
+    appointments = load_appointments()
+    if date not in appointments:
+        appointments[date] = {}
+    appointments[date][time] = lang
+    with open("appointments.json", "w") as f:
+        json.dump(appointments, f)
 
-# Handlers
-async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    keyboard=[[{"text":name,"callback_data":f"lang_{code}"}] for code,name in languages.items()]
-    await update.message.reply_text("Выберите язык:", reply_markup={"inline_keyboard":keyboard})
 
-async def language_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    ctx.user_data['lang']=q.data.split('_')[1]
-    kb=[]
-    for t in generate_time_slots():
-        if t in appointments:
-            label=f"{t} ❌ ({languages[appointments[t]]})"; cd="busy"
-        else:
-            label=t; cd=f"time_{t}"
-        kb.append([{"text":label,"callback_data":cd}])
-    await q.edit_message_text("Выберите время:", reply_markup={"inline_keyboard":kb})
+def is_booked(date, time):
+    appointments = load_appointments()
+    return date in appointments and time in appointments[date]
 
-async def time_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    t=q.data.split('_')[1]
-    if t in appointments:
-        await q.edit_message_text(f"❗ Уже занято ({languages[appointments[t]]}).")
-    else:
-        lang=ctx.user_data['lang']; appointments[t]=lang; save_appointments(appointments)
-        await q.edit_message_text(f"✅ Записаны на {t} ({languages[lang]}).")
-        await ctx.bot.send_message(chat_id=ADMIN_CHAT_ID,
-            text=f"Новая запись:\nВремя: {t}\nЯзык: {languages[lang]}\nПользователь: @{q.from_user.username or q.from_user.full_name}")
 
-async def busy_slot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer("Занято", show_alert=True)
+def get_language_text(lang, key):
+    return translations.get(lang, translations["en"]).get(key)
 
-# Настрой вебхука и веб‑сервер
-async def main():
-    app = Application.builder().token(BOT_TOKEN).updater(None).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(language_selected, pattern="^lang_"))
-    app.add_handler(CallbackQueryHandler(time_selected, pattern="^time_"))
-    app.add_handler(CallbackQueryHandler(busy_slot, pattern="^busy$"))
-    await app.bot.set_webhook(f"{URL}/telegram")
 
-    async def telegram(request: Request) -> Response:
-        data = await request.json()
-        await app.update_queue.put(Update.de_json(data, app.bot))
-        return Response()
+async def start(update: Update, context: CallbackContext):
+    keyboard = [
+        [InlineKeyboardButton("Русский 🇷🇺", callback_data="ru")],
+        [InlineKeyboardButton("English 🇬🇧", callback_data="en")],
+        [InlineKeyboardButton("ქართული 🇬🇪", callback_data="ka")],
+    ]
+    await update.message.reply_text(
+        "Пожалуйста, выберите язык обслуживания:\nPlease choose a service language:\nგთხოვთ, აირჩიოთ მომსახურების ენა:",
+        reply_markup=InlineKeyboardMarkup(keyboard))
+    return LANGUAGE
 
-    async def health(_: Request):
-        return PlainTextResponse("OK")
 
-    starlette_app = Starlette(routes=[
-        Route("/telegram", telegram, methods=["POST"]),
-        Route("/healthcheck", health, methods=["GET"]),
-    ])
-    webserver = uvicorn.Server(uvicorn.Config(starlette_app, port=PORT, host="0.0.0.0"))
-    async with app:
-        await app.start()
-        await webserver.serve()
-        await app.stop()
+async def choose_language(update: Update, context: CallbackContext):
+    lang = update.callback_query.data
+    context.user_data["lang"] = lang
+    await update.callback_query.answer()
+    keyboard = [
+        [InlineKeyboardButton((datetime.now() + timedelta(days=i)).strftime("%d.%m.%Y"), callback_data=str(i))]
+        for i in range(3)
+    ]
+    await update.callback_query.edit_message_text(
+        get_language_text(lang, "choose_date"),
+        reply_markup=InlineKeyboardMarkup(keyboard))
+    return DATE
 
-if __name__ == "__main__":
-    asyncio.run(main())
 
+async def choose_date(update: Update, context: CallbackContext):
+    lang = context.user_data["lang"]
+    days_from_now = int(update.callback_query.data)
+    chosen_date = (datetime.now() + timedelta(days=days_from_now)).strftime("%Y-%m-%d")
+    context.user_data["date"] = chosen_date
+
+    keyboard = [
+        [InlineKeyboardButton(f"{hour:02d}:00", callback_data=f"{hour:02d}:00")]
+        for hour in range(12, 22)
+    ]
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text(
+        get_language_text(lang, "choose_time"),
+        reply_markup=InlineKeyboardMarkup(keyboard))
+    return TIME
+
+
+async def choose_time(update: Update, context: CallbackContext):
+    lang = context.user_data["lang"]
+    date = context.user_data["date"]
+    time = update.callback_query.data
+
+    if is_booked(date, time):
+        booked_lang = load_appointments()[date][time]
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(get_language_text(lang, "already_booked").format(booked_lang))
+        return ConversationHandler.END
+
+    save_appointment(date, time, lang)
+    await context.bot.send_message(chat_id=ADMIN_CHAT_ID,
+                                   text=f"Запись: {update.effective_user.full_name} — {date} {time} ({lang})")
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text(get_language_text(lang, "confirm").format(date, time, lang))
+    return ConversationHandler.END
+
+
+if __name__ == '__main__':
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            LANGUAGE: [CallbackQueryHandler(choose_language)],
+            DATE: [CallbackQueryHandler(choose_date)],
+            TIME: [CallbackQueryHandler(choose_time)],
+        },
+        fallbacks=[]
+    )
+
+    application.add_handler(conv_handler)
+    application.run_polling()
