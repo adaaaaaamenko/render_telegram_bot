@@ -126,8 +126,10 @@ async def choose_time(update: Update, context: CallbackContext):
 
 async def main():
     bot = Bot(token=BOT_TOKEN)
+    try:
     await bot.delete_webhook(drop_pending_updates=True)
-
+except Exception as e:
+    print(f'Failed to delete webhook: {e}')
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
@@ -147,7 +149,24 @@ async def main():
     await application.run_polling()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    import asyncio
+    import sys
+
+    async def safe_main():
+        try:
+            await main()
+        except Exception as e:
+            print(f"Main crashed with error: {e}", file=sys.stderr)
+
+    try:
+        asyncio.run(safe_main())
+    except RuntimeError as e:
+        if "already running" in str(e):
+            loop = asyncio.get_event_loop()
+            loop.create_task(safe_main())
+            loop.run_forever()
+        else:
+            raise
 
 
 
