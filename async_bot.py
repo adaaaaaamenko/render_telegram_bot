@@ -1,151 +1,139 @@
+import asyncio
 import json
-import os
-from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CallbackContext, CallbackQueryHandler,
-    CommandHandler, ConversationHandler
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    ContextTypes,
+    MessageHandler,
+    filters
 )
-from dotenv import load_dotenv
-import asyncio
+from datetime import datetime, timedelta
+import os
 
-load_dotenv()
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
-
-if not BOT_TOKEN or not ADMIN_CHAT_ID:
-    raise ValueError("BOT_TOKEN or ADMIN_CHAT_ID not set in environment variables")
-
-ADMIN_CHAT_ID = int(ADMIN_CHAT_ID)
-
+# Константы этапов диалога
 LANGUAGE, DATE, TIME = range(3)
 
-translations = {
-    "ru": {
-        "choose_language": "Пожалуйста, выберите язык обслуживания:",
-        "choose_date": "Выберите дату:",
-        "choose_time": "Выберите время:",
-        "already_booked": "Это время уже занято. Язык записи: {}",
-        "confirm": "Вы записаны на {} в {} ({} язык). Спасибо!",
-    },
-    "en": {
-        "choose_language": "Please choose a service language:",
-        "choose_date": "Choose a date:",
-        "choose_time": "Choose a time:",
-        "already_booked": "This slot is already booked. Language: {}",
-        "confirm": "You are booked for {} at {} (language: {}). Thank you!",
-    },
-    "ka": {
-        "choose_language": "გთხოვთ, აირჩიოთ მომსახურების ენა:",
-        "choose_date": "აირჩიეთ თარიღი:",
-        "choose_time": "აირჩიეთ დრო:",
-        "already_booked": "ეს დრო უკვე დაკავებულია. ენა: {}",
-        "confirm": "თქვენ დაჯავშნეთ {} - {} (ენა: {}). მადლობა!",
-    }
-}
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")  # или укажи прямо: ADMIN_CHAT_ID = 123456789
+DATA_FILE = "appointments.json"
 
-def load_appointments():
-    if os.path.exists("appointments.json"):
-        with open("appointments.json", "r") as f:
+# Загружаем сохранённые записи
+def load_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
             return json.load(f)
     return {}
 
-def save_appointment(date, time, lang):
-    appointments = load_appointments()
-    if date not in appointments:
-        appointments[date] = {}
-    appointments[date][time] = lang
-    with open("appointments.json", "w") as f:
-        json.dump(appointments, f)
+# Сохраняем запись
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
-def is_booked(date, time):
-    appointments = load_appointments()
-    return date in appointments and time in appointments[date]
-
-def get_language_text(lang, key):
-    return translations.get(lang, translations["en"]).get(key)
-
-async def start(update: Update, context: CallbackContext):
+# Начало диалога
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("Русский 🇷🇺", callback_data="ru")],
-        [InlineKeyboardButton("English 🇬🇧", callback_data="en")],
-        [InlineKeyboardButton("ქართული 🇬🇪", callback_data="ka")],
+        [InlineKeyboardButton("Русский", callback_data="ru")],
+        [InlineKeyboardButton("English", callback_data="en")],
+        [InlineKeyboardButton("ქართული", callback_data="ka")],
     ]
-    await update.message.reply_text(
-        "Пожалуйста, выберите язык обслуживания:\nPlease choose a service language:\nგთხოვთ, აირჩიოთ მომსახურების ენა:",
-        reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text("Выберите язык обслуживания:", reply_markup=InlineKeyboardMarkup(keyboard))
     return LANGUAGE
 
-async def choose_language(update: Update, context: CallbackContext):
-    lang = update.callback_query.data
-    context.user_data["lang"] = lang
-    await update.callback_query.answer()
+# Язык выбран
+async def language_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data["language"] = query.data
+
+    today = datetime.now().date()
     keyboard = [
-        [InlineKeyboardButton((datetime.now() + timedelta(days=i)).strftime("%d.%m.%Y"), callback_data=str(i))]
+        [InlineKeyboardButton((today + timedelta(days=i)).strftime("%Y-%m-%d"), callback_data=(today + timedelta(days=i)).isoformat())]
         for i in range(3)
     ]
-    await update.callback_query.edit_message_text(
-        get_language_text(lang, "choose_date"),
-        reply_markup=InlineKeyboardMarkup(keyboard))
+    await query.edit_message_text("Выберите дату:", reply_markup=InlineKeyboardMarkup(keyboard))
     return DATE
 
-async def choose_date(update: Update, context: CallbackContext):
-    lang = context.user_data["lang"]
-    days_from_now = int(update.callback_query.data)
-    chosen_date = (datetime.now() + timedelta(days=days_from_now)).strftime("%Y-%m-%d")
-    context.user_data["date"] = chosen_date
+# Дата выбрана
+async def date_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data["date"] = query.data
 
-    keyboard = [
-        [InlineKeyboardButton(f"{hour:02d}:00", callback_data=f"{hour:02d}:00")]
-        for hour in range(12, 22)
-    ]
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(
-        get_language_text(lang, "choose_time"),
-        reply_markup=InlineKeyboardMarkup(keyboard))
+    appointments = load_data()
+    date_key = context.user_data["date"]
+    taken = appointments.get(date_key, {})
+
+    keyboard = []
+    for hour in range(12, 22):  # 12:00 – 21:00
+        time_str = f"{hour}:00"
+        if time_str in taken:
+            label = f"{time_str} ❌ {taken[time_str]}"
+            callback = "taken"
+        else:
+            label = f"{time_str}"
+            callback = time_str
+        keyboard.append([InlineKeyboardButton(label, callback_data=callback)])
+
+    await query.edit_message_text("Выберите время:", reply_markup=InlineKeyboardMarkup(keyboard))
     return TIME
 
-async def choose_time(update: Update, context: CallbackContext):
-    lang = context.user_data["lang"]
-    date = context.user_data["date"]
-    time = update.callback_query.data
+# Время выбрано
+async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    selected_time = query.data
 
-    if is_booked(date, time):
-        booked_lang = load_appointments()[date][time]
-        await update.callback_query.answer()
-        await update.callback_query.edit_message_text(get_language_text(lang, "already_booked").format(booked_lang))
-        return ConversationHandler.END
+    if selected_time == "taken":
+        await query.answer("Это время уже занято. Выберите другое.", show_alert=True)
+        return TIME
 
-    save_appointment(date, time, lang)
-    await context.bot.send_message(chat_id=ADMIN_CHAT_ID,
-                                   text=f"Запись: {update.effective_user.full_name} — {date} {time} ({lang})")
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(get_language_text(lang, "confirm").format(date, time, lang))
+    context.user_data["time"] = selected_time
+
+    # Сохраняем запись
+    date_key = context.user_data["date"]
+    time_key = context.user_data["time"]
+    lang = context.user_data["language"]
+    appointments = load_data()
+
+    if date_key not in appointments:
+        appointments[date_key] = {}
+
+    appointments[date_key][time_key] = lang
+    save_data(appointments)
+
+    msg = f"✅ Запись подтверждена:\nДата: {date_key}\nВремя: {time_key}\nЯзык: {lang}"
+    await query.edit_message_text(msg)
+
+    if ADMIN_CHAT_ID:
+        await context.bot.send_message(chat_id=int(ADMIN_CHAT_ID), text=f"🆕 Новая запись:\n{msg}")
+
     return ConversationHandler.END
 
-async def main():
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
+# Выход из диалога
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Запись отменена.")
+    return ConversationHandler.END
 
-    try:
-        await application.bot.delete_webhook(drop_pending_updates=True)
-    except Exception as e:
-        print(f"Ошибка при удалении webhook: {e}")
+# Главная функция
+async def main():
+    application = Application.builder().token(os.getenv("BOT_TOKEN")).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            LANGUAGE: [CallbackQueryHandler(choose_language)],
-            DATE: [CallbackQueryHandler(choose_date)],
-            TIME: [CallbackQueryHandler(choose_time)],
+            LANGUAGE: [CallbackQueryHandler(language_selected)],
+            DATE: [CallbackQueryHandler(date_selected)],
+            TIME: [CallbackQueryHandler(time_selected)],
         },
-        fallbacks=[]
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
 
     application.add_handler(conv_handler)
 
     await application.run_polling()
 
-if __name__ == '__main__':
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+# Запуск
+if __name__ == "__main__":
+    asyncio.run(main())
