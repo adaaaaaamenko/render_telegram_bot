@@ -1,7 +1,7 @@
 import json
 import os
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CallbackContext, CallbackQueryHandler,
     CommandHandler, ConversationHandler
@@ -144,37 +144,9 @@ async def main():
 
     application.add_handler(conv_handler)
 
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    await application.updater.wait()
-    await application.stop()
-    await application.shutdown()
-    
-if __name__ == '__main__':
-    import asyncio
-    import sys
-
-    async def safe_main():
-        try:
-            await main()
-        except Exception as e:
-            print(f"Main crashed with error: {e}", file=sys.stderr)
-
-    try:
-        asyncio.run(safe_main())
-    except RuntimeError as e:
-        if "already running" in str(e):
-            loop = asyncio.get_event_loop()
-            loop.create_task(safe_main())
-            loop.run_forever()
-        else:
-            raise
-
-
+    await application.run_polling()
 
 if __name__ == '__main__':
-    import asyncio
     try:
         asyncio.run(main())
     except RuntimeError as e:
