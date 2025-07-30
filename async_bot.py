@@ -125,12 +125,12 @@ async def choose_time(update: Update, context: CallbackContext):
     return ConversationHandler.END
 
 async def main():
-    bot = Bot(token=BOT_TOKEN)
-    try:
-    await bot.delete_webhook(drop_pending_updates=True)
-except Exception as e:
-    print(f'Failed to delete webhook: {e}')
     application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    try:
+        await application.bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        print(f"Ошибка при удалении webhook: {e}")
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -143,11 +143,14 @@ except Exception as e:
     )
 
     application.add_handler(conv_handler)
+
     await application.initialize()
     await application.start()
-    await application.bot.initialize()
-    await application.run_polling()
-
+    await application.updater.start_polling()
+    await application.updater.wait()
+    await application.stop()
+    await application.shutdown()
+    
 if __name__ == '__main__':
     import asyncio
     import sys
