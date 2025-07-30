@@ -7,6 +7,7 @@ from telegram.ext import (
     CommandHandler, ConversationHandler
 )
 from dotenv import load_dotenv
+import asyncio
 
 load_dotenv()
 
@@ -44,7 +45,6 @@ translations = {
     }
 }
 
-
 def load_appointments():
     if os.path.exists("appointments.json"):
         with open("appointments.json", "r") as f:
@@ -66,7 +66,6 @@ def is_booked(date, time):
 def get_language_text(lang, key):
     return translations.get(lang, translations["en"]).get(key)
 
-
 async def start(update: Update, context: CallbackContext):
     keyboard = [
         [InlineKeyboardButton("Русский 🇷🇺", callback_data="ru")],
@@ -75,8 +74,7 @@ async def start(update: Update, context: CallbackContext):
     ]
     await update.message.reply_text(
         "Пожалуйста, выберите язык обслуживания:\nPlease choose a service language:\nგთხოვთ, აირჩიოთ მომსახურების ენა:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+        reply_markup=InlineKeyboardMarkup(keyboard))
     return LANGUAGE
 
 async def choose_language(update: Update, context: CallbackContext):
@@ -89,8 +87,7 @@ async def choose_language(update: Update, context: CallbackContext):
     ]
     await update.callback_query.edit_message_text(
         get_language_text(lang, "choose_date"),
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+        reply_markup=InlineKeyboardMarkup(keyboard))
     return DATE
 
 async def choose_date(update: Update, context: CallbackContext):
@@ -99,7 +96,6 @@ async def choose_date(update: Update, context: CallbackContext):
     chosen_date = (datetime.now() + timedelta(days=days_from_now)).strftime("%Y-%m-%d")
     context.user_data["date"] = chosen_date
 
-    # Временные слоты от 12:00 до 21:00 с шагом 1 час
     keyboard = [
         [InlineKeyboardButton(f"{hour:02d}:00", callback_data=f"{hour:02d}:00")]
         for hour in range(12, 22)
@@ -107,8 +103,7 @@ async def choose_date(update: Update, context: CallbackContext):
     await update.callback_query.answer()
     await update.callback_query.edit_message_text(
         get_language_text(lang, "choose_time"),
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+        reply_markup=InlineKeyboardMarkup(keyboard))
     return TIME
 
 async def choose_time(update: Update, context: CallbackContext):
@@ -119,22 +114,20 @@ async def choose_time(update: Update, context: CallbackContext):
     if is_booked(date, time):
         booked_lang = load_appointments()[date][time]
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text(
-            get_language_text(lang, "already_booked").format(booked_lang)
-        )
+        await update.callback_query.edit_message_text(get_language_text(lang, "already_booked").format(booked_lang))
         return ConversationHandler.END
 
     save_appointment(date, time, lang)
     await context.bot.send_message(chat_id=ADMIN_CHAT_ID,
                                    text=f"Запись: {update.effective_user.full_name} — {date} {time} ({lang})")
     await update.callback_query.answer()
-    await update.callback_query.edit_message_text(
-        get_language_text(lang, "confirm").format(date, time, lang)
-    )
+    await update.callback_query.edit_message_text(get_language_text(lang, "confirm").format(date, time, lang))
     return ConversationHandler.END
 
-
 async def main():
+    bot = Bot(token=BOT_TOKEN)
+    await bot.delete_webhook(drop_pending_updates=True)
+
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
@@ -148,13 +141,14 @@ async def main():
     )
 
     application.add_handler(conv_handler)
-
     await application.initialize()
     await application.start()
-    await application.updater.start_polling()
-    await application.updater.wait()
-    await application.stop()
-    await application.shutdown()
+    await application.bot.initialize()
+    await application.run_polling()
+
+if __name__ == '__main__':
+    asyncio.run(main())
+
 
 
 if __name__ == '__main__':
