@@ -40,6 +40,9 @@ def save_appointments(appointments):
         json.dump(appointments, f)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message is None:
+        print("⚠️ update.message is None!")
+        return ConversationHandler.END
     keyboard = [
         [InlineKeyboardButton("Русский", callback_data='ru')],
         [InlineKeyboardButton("English", callback_data='en')],
