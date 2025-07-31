@@ -5,10 +5,9 @@ services:
     plan: free
     branch: main
     buildCommand: pip install -r requirements.txt
-    startCommand: python3 async_bot.py
-    autoDeploy: false
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: BOT_TOKEN
         sync: false
-      - key: ADMIN_CHAT_ID
-        sync: false
+      - key: WEBHOOK_URL
+        value: https://telegram-bot-XXXXX.onrender.com/webhook
