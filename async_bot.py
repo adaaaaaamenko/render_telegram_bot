@@ -120,7 +120,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Неизвестная команда.")
 
-def main():
+async def main():
     from telegram.ext import Application
 
     application = ApplicationBuilder().token(TOKEN).build()
@@ -152,7 +152,6 @@ def main():
         )
     else:
         logger.error("RENDER_EXTERNAL_HOSTNAME не установлен! Webhook не запущен.")
-def main(): → async def main():
 if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
