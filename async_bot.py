@@ -158,3 +158,5 @@ if __name__ == "__main__":
 
     nest_asyncio.apply()
     asyncio.get_event_loop().run_until_complete(main())
+def get_handlers():
+    return [conv_handler, other_handler_1, ...]  # экспортируй список хендлеров
