@@ -152,14 +152,9 @@ def main():
         )
     else:
         logger.error("RENDER_EXTERNAL_HOSTNAME не установлен! Webhook не запущен.")
-
+def main(): → async def main():
 if __name__ == "__main__":
-    main()
-
-    import nest_asyncio
     import asyncio
-
-    nest_asyncio.apply()
-    asyncio.get_event_loop().run_until_complete(main())
+    asyncio.run(main())
 def get_handlers():
     return [conv_handler, other_handler_1, ...]  # экспортируй список хендлеров
